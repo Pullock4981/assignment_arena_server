@@ -37,8 +37,8 @@ app.get("/", (req, res) => {
 async function run() {
     try {
         // Test MongoDB connection
-        await client.db("admin").command({ ping: 1 });
-        console.log("✅ Pinged your deployment. Connected to MongoDB!");
+        // await client.db("admin").command({ ping: 1 });
+        // console.log("✅ Pinged your deployment. Connected to MongoDB!");
 
         // Collections
         const db = client.db("assignment_arena_DB");
@@ -154,6 +154,85 @@ app.get('/submissions', async (req, res) => {
     }
 });
 
+// GET assignment details by ID
+app.get('/assignments/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const assignment = await assignments.findOne({ _id: new ObjectId(id) });
+
+        if (!assignment) {
+            return res.status(404).json({ message: "Assignment not found" });
+        }
+
+        res.json(assignment);
+    } catch (error) {
+        console.error("❌ Error fetching assignment details:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+
+// get submitted aggignment by student
+app.get('/submissions/student/:studentId', async (req, res) => {
+    const studentId = req.params.studentId;
+
+    try {
+        const result = await submissions.aggregate([
+            {
+                $match: {
+                    studentId: studentId  // stored as string
+                }
+            },
+            {
+                $lookup: {
+                    from: "assignments",
+                    localField: "assignmentId",
+                    foreignField: "_id",
+                    as: "assignmentInfo"
+                }
+            },
+            {
+                $unwind: "$assignmentInfo"
+            },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "studentId",
+                    foreignField: "_id",
+                    as: "studentInfo"
+                }
+            },
+            {
+                $unwind: {
+                    path: "$studentInfo",
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    studentId: 1,
+                    studentName: "$studentInfo.name",
+                    assignmentId: "$assignmentId",
+                    assignmentTitle: "$assignmentInfo.title",
+                    assignmentDeadline: "$assignmentInfo.deadline",
+                    submissionUrl: "$fileURL",
+                    note: "$submissionText",
+                    status: 1,
+                    feedback: 1,
+                    submittedAt: 1
+                }
+            }
+        ]).toArray();
+
+        res.json(result);
+    } catch (error) {
+        console.error("❌ Error fetching student submissions:", error);
+        res.status(500).send("Internal Server Error");
+    }
+});
+
 
 // GIVE FEEDBACK TO THE STUDENT'S ASSIGNMENT
 
@@ -183,29 +262,6 @@ app.put('/feedback/:id', async (req, res) => {
         res.send("Feedback updated successfully");
     } catch (error) {
         console.error("❌ Update feedback error:", error);
-        res.status(500).send("Internal Server Error");
-    }
-});
-
-// CHART BASED ON ASSIGNMENTS
-app.get('/chart/:assignmentId', async (req, res) => {
-    try {
-        const { assignmentId } = req.params;
-
-        // Aggregate count of submissions grouped by their status
-        const stats = await submissions.aggregate([
-            { $match: { assignmentId: assignmentId } }, // match by assignment ID
-            {
-                $group: {
-                    _id: "$status",  // group by submission status
-                    count: { $sum: 1 }
-                }
-            }
-        ]).toArray();
-
-        res.json(stats);
-    } catch (error) {
-        console.error("❌ Chart data error:", error);
         res.status(500).send("Internal Server Error");
     }
 });
@@ -255,6 +311,60 @@ app.get("/submissions/:studentId", async (req, res) => {
         res.status(500).send("Internal server error");
     }
 });
+
+// Express route for updating feedback/status
+app.put('/submissions/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { feedback, status } = req.body;
+
+        const updateData = {};
+        if (feedback !== undefined) updateData.feedback = feedback;
+        if (status !== undefined) updateData.status = status;
+
+        const result = await submissions.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).send("Submission not found");
+        }
+
+        res.json({ message: 'Submission updated successfully' });
+    } catch (err) {
+        console.error("❌ Feedback update error:", err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// for chart
+
+app.get('/chart/:assignmentId', async (req, res) => {
+    try {
+        const { assignmentId } = req.params;
+
+        const stats = await submissions.aggregate([
+            {
+                $match: {
+                    assignmentId: new ObjectId(assignmentId)  // ✅ Correct
+                }
+            },
+            {
+                $group: {
+                    _id: "$status",
+                    count: { $sum: 1 }
+                }
+            }
+        ]).toArray();
+
+        res.json(stats);
+    } catch (error) {
+        console.error("❌ Chart data error:", error);
+        res.status(500).send("Internal Server Error");
+    }
+});
+
 
 
 run().catch(console.dir);
